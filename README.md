@@ -3,7 +3,7 @@
 
 Customer web application.
 
-**Status:** Repository foundation only. The previous unmerged scaffold remains in PenniLogic-old.
+**Status:** Repository foundation plus the customer web application scaffold from PenniLogic/web#1; no product screens, authentication or administrative routes are implemented.
 
 This repository belongs to the new public, Free-plan `PenniLogic` organization.
 `migration-source.json` records the pinned source snapshot and excluded history.
@@ -15,7 +15,19 @@ The old private repositories, unmerged branches and discussions remain in
 ```text
 python scripts/setup.py
 python scripts/check_repository.py
+npm ci
+npm run lint
+npm run format:check
+npm run typecheck
+npm test
+npm run build
+npm run check:bundle
+npm run report:build
+npm run check:bundle:planted
 ```
+
+Repository-specific setup, commands and troubleshooting are maintained by hand in
+[docs/development.md](docs/development.md); that guide is not generated.
 
 See [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 Product specifications and the preserved backlog are in

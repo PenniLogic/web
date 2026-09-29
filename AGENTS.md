@@ -3,7 +3,7 @@
 
 Customer web application.
 
-**Current scope:** Repository foundation only. The previous unmerged scaffold remains in PenniLogic-old.
+**Current scope:** Repository foundation plus the customer web application scaffold from PenniLogic/web#1; no product screens, authentication or administrative routes are implemented.
 
 Read this file, the linked plan item, relevant product decisions and
 `.github/agent-policy.json`. This new public repository has its own delivery
@@ -32,7 +32,19 @@ cannot approve its own PR. Never invent another GitHub reviewer.
 ```text
 python scripts/setup.py
 python scripts/check_repository.py
+npm ci
+npm run lint
+npm run format:check
+npm run typecheck
+npm test
+npm run build
+npm run check:bundle
+npm run report:build
+npm run check:bundle:planted
 ```
+
+Repository-specific setup, commands and troubleshooting are maintained by hand in
+[docs/development.md](docs/development.md); that guide is not generated.
 
 Install the managed hook with the documented setup command. Preserve a custom
 hook rather than replacing it. Never claim an unrun build, test, accessibility
