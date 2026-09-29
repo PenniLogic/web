@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": ".next/planted/cache/tsc.tsbuildinfo"
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/planted/types/**/*.ts",
+    ".next/planted/dev/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}
