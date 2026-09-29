@@ -28,6 +28,11 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = Object.freeze([
     pattern: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
   },
   {
+    // Connection strings and other URLs carrying `user:password@`.
+    name: 'url-credentials',
+    pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@"'`]+:[^\s/@"'`]{4,}@/i,
+  },
+  {
     name: 'secret-assignment',
     pattern:
       /\b(?:secret|password|passwd|api[_-]?key|private[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret)\b\s*["']?\s*[:=]\s*["'`][^"'`\s]{16,}["'`]/i,

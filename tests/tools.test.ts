@@ -1,13 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   expectations,
   missingExpectations,
+  PLANTED_ASSIGNMENT_KEY,
+  PLANTED_ASSIGNMENT_VALUE,
   PLANTED_ENVIRONMENT_VARIABLE,
   plantedLiterals,
 } from '../tools/planted-secret-check.ts';
 import { scanArtifact, SECRET_PATTERNS } from '../tools/client-bundle-rules.ts';
-import { formatSeconds, parseTimedArguments, planInvocation, quoteForCmd } from '../tools/timed.ts';
+import {
+  formatSeconds,
+  parseTimedArguments,
+  planInvocation,
+  quoteForCmd,
+  runAsScript,
+} from '../tools/timed.ts';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('planted literals', () => {
   it('each trips exactly the detection rule it is named after', () => {
@@ -23,18 +35,43 @@ describe('planted literals', () => {
     }
   });
 
+  it('cover the credential formats a customer app is most likely to leak', () => {
+    expect(Object.keys(plantedLiterals())).toEqual(
+      expect.arrayContaining([
+        'stripe-live-key',
+        'aws-access-key-id',
+        'json-web-token',
+        'url-credentials',
+      ]),
+    );
+  });
+
+  it('include an object-literal assignment that survives minification', () => {
+    const minified = `var s={${PLANTED_ASSIGNMENT_KEY}:"${PLANTED_ASSIGNMENT_VALUE}",label:"planted"};`;
+    const findings = scanArtifact('static/chunks/x.js', minified, {
+      serverOnlyNames: [],
+      environment: {},
+    });
+    expect(findings.map((finding) => finding.subject)).toEqual(['secret-assignment']);
+  });
+
   it('are obviously synthetic', () => {
-    for (const value of Object.values(plantedLiterals())) {
+    for (const value of [...Object.values(plantedLiterals()), PLANTED_ASSIGNMENT_VALUE]) {
       expect(value.toLowerCase()).toMatch(/planted/);
     }
   });
 });
 
 describe('expectations', () => {
-  it('require every literal in client JS and the server value in prerendered output', () => {
+  it('require every literal and the assignment in client JS and the server value in prerendered output', () => {
     const literals = plantedLiterals();
     const expected = expectations(literals);
-    expect(expected).toHaveLength(Object.keys(literals).length + 1);
+    expect(expected).toHaveLength(Object.keys(literals).length + 2);
+    expect(expected).toContainEqual({
+      rule: 'secret-pattern',
+      subject: 'secret-assignment',
+      location: 'static/',
+    });
     expect(expected.at(-1)).toEqual({
       rule: 'secret-env-value',
       subject: PLANTED_ENVIRONMENT_VARIABLE,
@@ -57,11 +94,13 @@ describe('expectations', () => {
     // Found in HTML only, not in a client chunk, so the JS expectation is still missing.
     expect(missingExpectations(expected, found).map((item) => item.subject)).toEqual([
       'stripe-live-key',
+      'secret-assignment',
       PLANTED_ENVIRONMENT_VARIABLE,
     ]);
     expect(
       missingExpectations(expected, [
         { ...found[0]!, file: 'static/chunks/x.js' },
+        { ...found[0]!, subject: 'secret-assignment', file: 'static/chunks/x.js' },
         {
           rule: 'secret-env-value',
           subject: PLANTED_ENVIRONMENT_VARIABLE,
@@ -72,6 +111,38 @@ describe('expectations', () => {
         },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe('runAsScript', () => {
+  const url = 'file:///repo/tools/example.ts';
+
+  it('runs the tool and forwards its exit status when the module is the entry point', () => {
+    const previous = process.exitCode;
+    try {
+      runAsScript({ url, main: true } as ImportMeta, () => 3);
+      expect(process.exitCode).toBe(3);
+    } finally {
+      process.exitCode = previous;
+    }
+  });
+
+  it('does nothing when the module is merely imported', () => {
+    const run = vi.fn(() => 0);
+    runAsScript({ url, main: false } as ImportMeta, run);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a runtime without import.meta.main instead of silently passing', () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('exit called');
+    }) as never);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const run = vi.fn(() => 0);
+    expect(() => runAsScript({ url } as ImportMeta, run)).toThrow('exit called');
+    expect(exit).toHaveBeenCalledWith(2);
+    expect(run).not.toHaveBeenCalled();
+    expect(error.mock.calls.flat().join('\n')).toMatch(/Node >= 24\.2/);
   });
 });
 

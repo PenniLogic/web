@@ -5,7 +5,8 @@
  *
  *   node tools/client-bundle-check.ts [--dist <directory>]
  *
- * Exit codes: 0 clean, 1 findings, 2 usage error or no build output.
+ * Exit codes: 0 clean, 1 findings, 2 usage error or no completed build
+ * (`BUILD_ID` missing, so the residue of a failed build never passes).
  * Findings name the rule, file and variable or pattern, never the value.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -19,6 +20,7 @@ import {
   type Finding,
   type ScanContext,
 } from './client-bundle-rules.ts';
+import { runAsScript } from './timed.ts';
 
 /** Everything under `static/` is served to browsers as-is. */
 const STATIC_TEXT_EXTENSIONS = new Set([
@@ -85,7 +87,16 @@ export interface CheckResult {
   readonly findings: readonly Finding[];
 }
 
+/** `next build` writes `BUILD_ID` last; without it the output is a failed build's residue. */
+export function hasCompletedBuild(distDir: string): boolean {
+  const buildIdFile = path.join(path.resolve(distDir), 'BUILD_ID');
+  return existsSync(buildIdFile) && statSync(buildIdFile).isFile();
+}
+
 export function checkClientBundle(distDir: string, context: ScanContext): CheckResult {
+  if (!hasCompletedBuild(distDir)) {
+    throw new Error(`no completed production build under ${distDir}; run "npm run build" first`);
+  }
   const artifacts = collectClientArtifacts(distDir);
   const findings: Finding[] = [];
   for (const file of artifacts.files) {
@@ -128,7 +139,13 @@ export function main(argv: readonly string[], environment: ScanContext['environm
     serverOnlyNames: serverOnlyVariableNames,
     environment,
   };
-  const result = checkClientBundle(parsed.distDir, context);
+  let result: CheckResult;
+  try {
+    result = checkClientBundle(parsed.distDir, context);
+  } catch (error) {
+    console.error(`client-bundle-check: ${error instanceof Error ? error.message : String(error)}`);
+    return 2;
+  }
   if (result.artifacts === 0) {
     console.error(
       `client-bundle-check: no browser-delivered artifacts found under ${parsed.distDir}; run "npm run build" first`,
@@ -150,6 +167,4 @@ export function main(argv: readonly string[], environment: ScanContext['environm
   return 0;
 }
 
-if (import.meta.main) {
-  process.exitCode = main(process.argv.slice(2), process.env);
-}
+runAsScript(import.meta, () => main(process.argv.slice(2), process.env));

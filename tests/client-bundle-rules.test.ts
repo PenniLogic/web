@@ -23,6 +23,7 @@ const fixtures = {
   jwt: ['eyJhbGciOiJub25lIn0', 'eyJzdWIiOiJ0ZXN0In0', 'signature_00'].join('.'),
   pemHeader: ['-----BEGIN', 'RSA PRIVATE KEY-----'].join(' '),
   assignment: `apiKey: "${'k'.repeat(20)}"`,
+  connectionString: ['postgres://app_user', 'p4ss-word@db.internal.test:5432/app'].join(':'),
 };
 
 describe('SECRET_PATTERNS', () => {
@@ -36,6 +37,7 @@ describe('SECRET_PATTERNS', () => {
     ['json-web-token', fixtures.jwt],
     ['private-key-block', fixtures.pemHeader],
     ['secret-assignment', fixtures.assignment],
+    ['url-credentials', fixtures.connectionString],
   ])('%s matches its fixture inside minified-looking code', (name, value) => {
     const content = `!function(){var e="${value}";return e}();`;
     const findings = scanArtifact('static/chunks/a.js', content, EMPTY);
@@ -53,6 +55,10 @@ describe('SECRET_PATTERNS', () => {
       'const apiKey = process.env.NEXT_PUBLIC_APP_ENV;',
       '"eyJ.not.a.jwt"',
       'gh_not_a_token',
+      'fetch("https://api.example.test:8443/v1/items?x=1")',
+      'new URL("postgres://db.internal.test:5432/app")',
+      '"mailto:someone@example.test"',
+      'href="https://user@example.test/profile"',
     ].join('\n');
     expect(scanArtifact('static/chunks/b.js', content, EMPTY)).toEqual([]);
   });

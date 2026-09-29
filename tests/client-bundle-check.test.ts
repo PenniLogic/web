@@ -4,7 +4,12 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { checkClientBundle, collectClientArtifacts, main } from '../tools/client-bundle-check.ts';
+import {
+  checkClientBundle,
+  collectClientArtifacts,
+  hasCompletedBuild,
+  main,
+} from '../tools/client-bundle-check.ts';
 
 let distDir: string;
 
@@ -23,6 +28,12 @@ function writeCleanBuild(): void {
   write('server/app/index.rsc', '1:["$","html",null,{}]');
   write('server/app/page.js', 'module.exports = "server bundle, not delivered to browsers";');
   write('server/chunks/ssr/x.js', 'server chunk');
+}
+
+/** What `next build` leaves behind when it fails after emitting chunks but before BUILD_ID. */
+function writeFailedBuildResidue(): void {
+  write('static/chunks/main.js', '!function(){console.log("partial")}();');
+  write('server/app/index.html', '<!doctype html><html><body>partial</body></html>');
 }
 
 beforeEach(() => {
@@ -56,6 +67,14 @@ describe('checkClientBundle', () => {
     const result = checkClientBundle(distDir, { serverOnlyNames: [], environment: {} });
     expect(result.artifacts).toBe(4);
     expect(result.findings).toEqual([]);
+  });
+
+  it('refuses the residue of a failed build instead of passing it', () => {
+    writeFailedBuildResidue();
+    expect(hasCompletedBuild(distDir)).toBe(false);
+    expect(() => checkClientBundle(distDir, { serverOnlyNames: [], environment: {} })).toThrow(
+      /no completed production build/,
+    );
   });
 
   it('fails when a server-only value reaches a client chunk', () => {
@@ -113,6 +132,22 @@ describe('main', () => {
   it('returns 2 when there is no build output', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(main(['--dist', path.join(distDir, 'missing')], {})).toBe(2);
+    expect(error.mock.calls.flat().join('\n')).toMatch(/no completed production build/);
+  });
+
+  it('returns 2 for a failed build that left artifacts but no BUILD_ID', () => {
+    writeFailedBuildResidue();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(main(['--dist', distDir], {})).toBe(2);
+    expect(error.mock.calls.flat().join('\n')).toMatch(/no completed production build/);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('returns 2 for a completed build with nothing browser-delivered', () => {
+    write('BUILD_ID', 'empty-build');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(main(['--dist', distDir], {})).toBe(2);
     expect(error.mock.calls.flat().join('\n')).toMatch(/no browser-delivered artifacts/);
   });
 

@@ -11,7 +11,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { gzipSync } from 'node:zlib';
 
-import { appendStepSummary } from './timed.ts';
+import { appendStepSummary, runAsScript } from './timed.ts';
 
 export interface Size {
   readonly raw: number;
@@ -313,6 +313,4 @@ export function main(argv: readonly string[]): number {
   return 0;
 }
 
-if (import.meta.main) {
-  process.exitCode = main(process.argv.slice(2));
-}
+runAsScript(import.meta, () => main(process.argv.slice(2)));

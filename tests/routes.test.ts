@@ -69,4 +69,26 @@ describe('application routes', () => {
     const layout = readFileSync(path.join(appDir, 'layout.tsx'), 'utf8');
     expect(layout).not.toMatch(/<Script|analytics|gtag|sentry|datadog|posthog|segment/i);
   });
+
+  it('reads process.env only through the typed schema in src/env', () => {
+    const offenders = readdirSync(path.join(repositoryRoot, 'src'), {
+      withFileTypes: true,
+      recursive: true,
+    })
+      .filter((entry) => entry.isFile() && /\.(ts|tsx)$/.test(entry.name))
+      .map((entry) => path.join(entry.parentPath, entry.name))
+      .filter((file) => !file.startsWith(path.join(repositoryRoot, 'src', 'env') + path.sep))
+      .filter((file) => /\bprocess\s*\.\s*env\b/.test(readFileSync(file, 'utf8')))
+      .map((file) => path.relative(repositoryRoot, file).split(path.sep).join('/'));
+    expect(offenders).toEqual([]);
+  });
+
+  it('gives the main landmark exactly one owner, the root layout', () => {
+    const owners = readdirSync(appDir, { withFileTypes: true, recursive: true })
+      .filter((entry) => entry.isFile() && /\.(tsx|jsx)$/.test(entry.name))
+      .map((entry) => path.join(entry.parentPath, entry.name))
+      .filter((file) => /<main\b/.test(readFileSync(file, 'utf8')))
+      .map((file) => path.relative(appDir, file).split(path.sep).join('/'));
+    expect(owners).toEqual(['layout.tsx']);
+  });
 });

@@ -24,6 +24,23 @@ export function formatSeconds(milliseconds: number): string {
 }
 
 /**
+ * Whether this module is the process entry point. `import.meta.main` exists
+ * from Node 24.2; on an older runtime it is `undefined`, which would silently
+ * skip every tool while still exiting 0, so that case fails closed.
+ */
+export function runAsScript(meta: ImportMeta, run: () => number): void {
+  if (meta.main === undefined) {
+    console.error(
+      `${meta.url}: this tool needs Node >= 24.2 (import.meta.main); running on ${process.version}`,
+    );
+    process.exit(2);
+  }
+  if (meta.main) {
+    process.exitCode = run();
+  }
+}
+
+/**
  * Quotes one argument for cmd.exe. Package binaries are `.cmd` shims on
  * Windows and can only be started through the shell, which requires a single
  * command line; passing an argument array together with `shell: true` is
@@ -86,6 +103,4 @@ function main(argv: readonly string[]): number {
   return status;
 }
 
-if (import.meta.main) {
-  process.exitCode = main(process.argv.slice(2));
-}
+runAsScript(import.meta, () => main(process.argv.slice(2)));
