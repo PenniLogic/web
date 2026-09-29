@@ -21,6 +21,7 @@ function write(relative: string, content: string): void {
 
 function writeCleanBuild(): void {
   write('BUILD_ID', 'test-build');
+  write('export-marker.json', '{"version":1}');
   write('static/chunks/main.js', '!function(){console.log("hello")}();');
   write('static/chunks/app.css', 'body{margin:0}');
   write('static/media/logo.woff2', 'binary-font-content');
@@ -30,8 +31,19 @@ function writeCleanBuild(): void {
   write('server/chunks/ssr/x.js', 'server chunk');
 }
 
-/** What `next build` leaves behind when it fails after emitting chunks but before BUILD_ID. */
+/** What `next build` leaves behind when it fails at type-check: chunks, no BUILD_ID. */
 function writeFailedBuildResidue(): void {
+  write('static/chunks/main.js', '!function(){console.log("partial")}();');
+  write('server/app/index.html', '<!doctype html><html><body>partial</body></html>');
+}
+
+/**
+ * What `next build` leaves behind when it fails while prerendering: BUILD_ID
+ * is already written, static generation aborted, export-marker.json absent.
+ */
+function writePrerenderFailureResidue(): void {
+  write('BUILD_ID', 'aborted-build');
+  write('build-manifest.json', '{"rootMainFiles":[],"polyfillFiles":[]}');
   write('static/chunks/main.js', '!function(){console.log("partial")}();');
   write('server/app/index.html', '<!doctype html><html><body>partial</body></html>');
 }
@@ -69,8 +81,16 @@ describe('checkClientBundle', () => {
     expect(result.findings).toEqual([]);
   });
 
-  it('refuses the residue of a failed build instead of passing it', () => {
+  it('refuses the residue of a build that failed at type-check', () => {
     writeFailedBuildResidue();
+    expect(hasCompletedBuild(distDir)).toBe(false);
+    expect(() => checkClientBundle(distDir, { serverOnlyNames: [], environment: {} })).toThrow(
+      /no completed production build/,
+    );
+  });
+
+  it('refuses the residue of a build that failed while prerendering (BUILD_ID present)', () => {
+    writePrerenderFailureResidue();
     expect(hasCompletedBuild(distDir)).toBe(false);
     expect(() => checkClientBundle(distDir, { serverOnlyNames: [], environment: {} })).toThrow(
       /no completed production build/,
@@ -144,8 +164,18 @@ describe('main', () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  it('returns 2 for a build that aborted during prerendering after writing BUILD_ID', () => {
+    writePrerenderFailureResidue();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(main(['--dist', distDir], {})).toBe(2);
+    expect(error.mock.calls.flat().join('\n')).toMatch(/no completed production build/);
+    expect(log).not.toHaveBeenCalled();
+  });
+
   it('returns 2 for a completed build with nothing browser-delivered', () => {
     write('BUILD_ID', 'empty-build');
+    write('export-marker.json', '{"version":1}');
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(main(['--dist', distDir], {})).toBe(2);
     expect(error.mock.calls.flat().join('\n')).toMatch(/no browser-delivered artifacts/);

@@ -6,7 +6,8 @@
  *   node tools/client-bundle-check.ts [--dist <directory>]
  *
  * Exit codes: 0 clean, 1 findings, 2 usage error or no completed build
- * (`BUILD_ID` missing, so the residue of a failed build never passes).
+ * (`BUILD_ID` or `export-marker.json` missing, so the residue of a build that
+ * failed at type-check or while prerendering never passes).
  * Findings name the rule, file and variable or pattern, never the value.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -87,10 +88,20 @@ export interface CheckResult {
   readonly findings: readonly Finding[];
 }
 
-/** `next build` writes `BUILD_ID` last; without it the output is a failed build's residue. */
+/**
+ * Marker of a completed `next build`. `BUILD_ID` is written before static
+ * generation, so a build that fails while prerendering leaves it behind;
+ * `export-marker.json` is written after prerendering finishes and is absent
+ * from that residue as well as from a build that failed at type-check.
+ */
+export const BUILD_COMPLETION_MARKER = 'export-marker.json';
+
 export function hasCompletedBuild(distDir: string): boolean {
-  const buildIdFile = path.join(path.resolve(distDir), 'BUILD_ID');
-  return existsSync(buildIdFile) && statSync(buildIdFile).isFile();
+  const absoluteDist = path.resolve(distDir);
+  return ['BUILD_ID', BUILD_COMPLETION_MARKER].every((name) => {
+    const file = path.join(absoluteDist, name);
+    return existsSync(file) && statSync(file).isFile();
+  });
 }
 
 export function checkClientBundle(distDir: string, context: ScanContext): CheckResult {

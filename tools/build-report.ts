@@ -11,6 +11,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { gzipSync } from 'node:zlib';
 
+import { hasCompletedBuild } from './client-bundle-check.ts';
 import { appendStepSummary, runAsScript } from './timed.ts';
 
 export interface Size {
@@ -215,10 +216,10 @@ function collectCategories(distDir: string): CategoryReport[] {
 
 export function buildReport(distDir: string): BuildReport {
   const absoluteDist = path.resolve(distDir);
-  const buildIdFile = path.join(absoluteDist, 'BUILD_ID');
-  if (!existsSync(buildIdFile)) {
-    throw new Error(`no production build found under ${distDir}; run "npm run build" first`);
+  if (!hasCompletedBuild(absoluteDist)) {
+    throw new Error(`no completed production build under ${distDir}; run "npm run build" first`);
   }
+  const buildIdFile = path.join(absoluteDist, 'BUILD_ID');
   const buildManifest = readJson(path.join(absoluteDist, 'build-manifest.json')) as {
     readonly rootMainFiles?: readonly string[];
     readonly polyfillFiles?: readonly string[];

@@ -24,6 +24,7 @@ const fixtures = {
   pemHeader: ['-----BEGIN', 'RSA PRIVATE KEY-----'].join(' '),
   assignment: `apiKey: "${'k'.repeat(20)}"`,
   connectionString: ['postgres://app_user', 'p4ss-word@db.internal.test:5432/app'].join(':'),
+  passwordOnlyUrl: ['rediss://', 'AccessKey00000000000000@cache.internal.test:6380'].join(':'),
 };
 
 describe('SECRET_PATTERNS', () => {
@@ -38,6 +39,7 @@ describe('SECRET_PATTERNS', () => {
     ['private-key-block', fixtures.pemHeader],
     ['secret-assignment', fixtures.assignment],
     ['url-credentials', fixtures.connectionString],
+    ['url-credentials', fixtures.passwordOnlyUrl],
   ])('%s matches its fixture inside minified-looking code', (name, value) => {
     const content = `!function(){var e="${value}";return e}();`;
     const findings = scanArtifact('static/chunks/a.js', content, EMPTY);
@@ -59,6 +61,9 @@ describe('SECRET_PATTERNS', () => {
       'new URL("postgres://db.internal.test:5432/app")',
       '"mailto:someone@example.test"',
       'href="https://user@example.test/profile"',
+      '"redis://cache.internal.test:6379/0"',
+      '"https://example.test/path?next=https://other.test/@handle"',
+      'const t = "{scheme}://{host}:{port}/{path}";',
     ].join('\n');
     expect(scanArtifact('static/chunks/b.js', content, EMPTY)).toEqual([]);
   });

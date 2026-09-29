@@ -22,21 +22,26 @@ afterEach(() => {
 });
 
 describe('planted literals', () => {
-  it('each trips exactly the detection rule it is named after', () => {
+  it('each trips exactly the detection rule it is mapped to', () => {
     const literals = plantedLiterals();
     const ruleNames = new Set(SECRET_PATTERNS.map((pattern) => pattern.name));
-    for (const [rule, value] of Object.entries(literals)) {
-      expect(ruleNames.has(rule), `unknown rule ${rule}`).toBe(true);
+    for (const { label, rule, value } of literals) {
+      expect(ruleNames.has(rule), `unknown rule ${rule} for ${label}`).toBe(true);
       const findings = scanArtifact('static/chunks/x.js', `var v="${value}";`, {
         serverOnlyNames: [],
         environment: {},
       });
-      expect(findings.map((finding) => finding.subject)).toEqual([rule]);
+      expect(
+        findings.map((finding) => finding.subject),
+        label,
+      ).toEqual([rule]);
     }
   });
 
-  it('cover the credential formats a customer app is most likely to leak', () => {
-    expect(Object.keys(plantedLiterals())).toEqual(
+  it('have unique labels and cover the credential formats a customer app is most likely to leak', () => {
+    const literals = plantedLiterals();
+    expect(new Set(literals.map((literal) => literal.label)).size).toBe(literals.length);
+    expect(literals.map((literal) => literal.rule)).toEqual(
       expect.arrayContaining([
         'stripe-live-key',
         'aws-access-key-id',
@@ -44,6 +49,13 @@ describe('planted literals', () => {
         'url-credentials',
       ]),
     );
+  });
+
+  it('include both a user:password and a password-only connection string', () => {
+    const urls = plantedLiterals().filter((literal) => literal.rule === 'url-credentials');
+    expect(urls).toHaveLength(2);
+    expect(urls.some((literal) => /:\/\/[^:@/]+:[^@]+@/.test(literal.value))).toBe(true);
+    expect(urls.some((literal) => /:\/\/:[^@]+@/.test(literal.value))).toBe(true);
   });
 
   it('include an object-literal assignment that survives minification', () => {
@@ -56,51 +68,70 @@ describe('planted literals', () => {
   });
 
   it('are obviously synthetic', () => {
-    for (const value of [...Object.values(plantedLiterals()), PLANTED_ASSIGNMENT_VALUE]) {
+    for (const value of [
+      ...plantedLiterals().map((literal) => literal.value),
+      PLANTED_ASSIGNMENT_VALUE,
+    ]) {
       expect(value.toLowerCase()).toMatch(/planted/);
     }
   });
 });
 
 describe('expectations', () => {
-  it('require every literal and the assignment in client JS and the server value in prerendered output', () => {
+  it('require every rule in client JS, counting literals that share a rule, plus the assignment and the server value', () => {
     const literals = plantedLiterals();
     const expected = expectations(literals);
-    expect(expected).toHaveLength(Object.keys(literals).length + 2);
+    const distinctRules = new Set(literals.map((literal) => literal.rule)).size;
+    expect(expected).toHaveLength(distinctRules + 2);
+    expect(expected).toContainEqual({
+      rule: 'secret-pattern',
+      subject: 'url-credentials',
+      location: 'static/',
+      occurrences: 2,
+    });
     expect(expected).toContainEqual({
       rule: 'secret-pattern',
       subject: 'secret-assignment',
       location: 'static/',
+      occurrences: 1,
     });
     expect(expected.at(-1)).toEqual({
       rule: 'secret-env-value',
       subject: PLANTED_ENVIRONMENT_VARIABLE,
       location: 'server/',
+      occurrences: 1,
     });
   });
 
-  it('report what the check missed', () => {
-    const expected = expectations({ 'stripe-live-key': 'x' });
-    const found = [
-      {
-        rule: 'secret-pattern' as const,
-        subject: 'stripe-live-key',
-        file: 'server/app/x.html',
-        line: 1,
-        column: 1,
-        occurrences: 1,
-      },
-    ];
+  it('report what the check missed, including a literal that shares a rule with a caught one', () => {
+    const expected = expectations([
+      { label: 'a', rule: 'url-credentials', value: 'x' },
+      { label: 'b', rule: 'url-credentials', value: 'y' },
+    ]);
+    const inHtmlOnly = {
+      rule: 'secret-pattern' as const,
+      subject: 'url-credentials',
+      file: 'server/app/x.html',
+      line: 1,
+      column: 1,
+      occurrences: 2,
+    };
     // Found in HTML only, not in a client chunk, so the JS expectation is still missing.
-    expect(missingExpectations(expected, found).map((item) => item.subject)).toEqual([
-      'stripe-live-key',
+    expect(missingExpectations(expected, [inHtmlOnly]).map((item) => item.subject)).toEqual([
+      'url-credentials',
       'secret-assignment',
       PLANTED_ENVIRONMENT_VARIABLE,
     ]);
+    // Only one of the two URL literals reached the chunk: still missing.
     expect(
       missingExpectations(expected, [
-        { ...found[0]!, file: 'static/chunks/x.js' },
-        { ...found[0]!, subject: 'secret-assignment', file: 'static/chunks/x.js' },
+        { ...inHtmlOnly, file: 'static/chunks/x.js', occurrences: 1 },
+      ]).map((item) => item.subject),
+    ).toContain('url-credentials');
+    expect(
+      missingExpectations(expected, [
+        { ...inHtmlOnly, file: 'static/chunks/x.js' },
+        { ...inHtmlOnly, subject: 'secret-assignment', file: 'static/chunks/x.js', occurrences: 1 },
         {
           rule: 'secret-env-value',
           subject: PLANTED_ENVIRONMENT_VARIABLE,

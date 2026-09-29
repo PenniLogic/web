@@ -80,7 +80,12 @@ The `<main id="main">` landmark has exactly one owner, the root layout. Route-gr
 and `not-found.tsx` render content only, so an unmatched URL and a customer page that calls
 `notFound()` produce the same document structure with one landmark and one `h1`
 (`tests/home-page.test.tsx`, `tests/routes.test.ts`). Keep it that way when adding customer chrome:
-put headers and navigation in the root layout or in content-only wrappers.
+put headers and navigation in the root layout or in content-only wrappers. Two test caveats:
+`home-page.test.tsx` imports `src/app/layout.tsx`, which parses `NEXT_PUBLIC_APP_ENV` from the
+test process environment at import time (an invalid value in the shell fails the suite, by
+design), and the "single owner" assertion in `routes.test.ts` is textual (it looks for `<main` in
+`src/app` sources), so a landmark produced indirectly through a component would need the
+render-level test to catch it.
 
 ## Environment
 
@@ -107,6 +112,10 @@ Rules:
 - Application code never reads `process.env` directly. ESLint (`no-restricted-syntax` for
   `src/**` outside `src/env/`) and `tests/routes.test.ts` both fail on a direct read, so a
   variable cannot be used without being declared, validated and covered by the bundle check.
+  This is a fence, not a boundary: `process['env']`, destructuring `process` or
+  `globalThis.process.env` are not matched by the selector or the source scan. They are treated
+  as deliberate evasion to be rejected in review, and the bundle check still scans whatever such
+  code emits.
 
 To add a variable, declare it in the matching schema, extend the table above and add a case to
 `tests/env.test.ts`. New server variables are covered by the client-bundle check automatically.
@@ -114,41 +123,50 @@ To add a variable, declare it in the matching schema, extend the table above and
 ## Client-bundle secret check
 
 `npm run check:bundle` (`tools/client-bundle-check.ts`) scans every browser-delivered artifact of
-a completed production build (`BUILD_ID` present): everything under `.next/static/` and the
-prerendered HTML and React Server Component payloads under `.next/server/app/` and
-`.next/server/pages/`. It fails (exit 1) when it finds:
+a completed production build: everything under `.next/static/` and the prerendered HTML and React
+Server Component payloads under `.next/server/app/` and `.next/server/pages/`. A build counts as
+completed only when both `BUILD_ID` and `export-marker.json` exist. Next writes `BUILD_ID` before
+static generation, so a build that fails while prerendering leaves it behind together with
+partial output; `export-marker.json` is written after prerendering finishes and is absent from
+that residue as well as from a build that failed at type-check. `npm run report:build` applies the
+same criterion. The check fails (exit 1) when it finds:
 
-| Rule                | What it detects                                                                                                                                                              |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `secret-pattern`    | Credential formats: PEM private keys, GitHub, AWS, Google, Slack and Stripe live keys, JWTs, URLs carrying `user:password@` (connection strings), `secret: "…"` assignments. |
-| `server-only-value` | The value of a declared server-only variable from the build environment (verbatim, JSON-escaped or HTML-escaped).                                                            |
-| `server-only-name`  | The name of a declared server-only variable.                                                                                                                                 |
-| `secret-env-value`  | The value of any environment variable whose name looks like a credential (`*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_API_KEY`, …).                                              |
+| Rule                | What it detects                                                                                                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `secret-pattern`    | Credential formats: PEM private keys, GitHub, AWS, Google, Slack and Stripe live keys, JWTs, URLs carrying `user:password@` or `:password@` (connection strings), `secret: "…"` assignments. |
+| `server-only-value` | The value of a declared server-only variable from the build environment (verbatim, JSON-escaped or HTML-escaped).                                                                            |
+| `server-only-name`  | The name of a declared server-only variable.                                                                                                                                                 |
+| `secret-env-value`  | The value of any environment variable whose name looks like a credential (`*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_API_KEY`, …).                                                              |
 
 Findings report the rule, file, line, column and the variable or pattern name; matched values are
-never printed. Exit 2 means there is no completed build (the residue of a failed `next build`
-never passes), nothing browser-delivered was found, or a usage error. `NODE_ENV` is exempt from
-the server-only rules because the framework inlines it by design.
+never printed. Exit 2 means there is no completed build (the residue of a `next build` that failed
+at type-check or while prerendering never passes), nothing browser-delivered was found, or a usage
+error. `NODE_ENV` is exempt from the server-only rules because the framework inlines it by design.
 
 `npm run check:bundle:planted` (`tools/planted-secret-check.ts`) proves the check catches real
 leaks: it writes a temporary route under `src/app/(customer)/planted-secret-fixture/` containing a
-Client Component with synthetic Stripe-, AWS-, JWT- and connection-string-shaped literals plus an
-object-literal `clientSecret` property, and a Server Component that renders a random
-`WEB_PLANTED_TOKEN` value; builds that variant into the isolated `.next/planted` directory; and
-passes only if the bundle check reports every literal and the assignment inside a client
-JavaScript chunk and the planted value inside prerendered output. The fixture and the planted
-build are removed afterwards (`--keep` retains the build output for inspection). Do not run it
-while `next dev` is watching `src/app`, because the dev server would briefly pick up the fixture
-route.
+Client Component with synthetic Stripe-, AWS- and JWT-shaped literals, a `user:password@` and a
+password-only `rediss://:key@` connection string, plus an object-literal `clientSecret` property,
+and a Server Component that renders a random `WEB_PLANTED_TOKEN` value; builds that variant into
+the isolated `.next/planted` directory; and passes only if the bundle check reports every literal
+(counting both connection strings) and the assignment inside a client JavaScript chunk and the
+planted value inside prerendered output. The fixture and the planted build are removed afterwards
+(`--keep` retains the build output for inspection). Do not run it while `next dev` is watching
+`src/app`, because the dev server would briefly pick up the fixture route.
 
 Limits: the check finds verbatim, JSON-escaped and HTML-escaped values, not encoded, hashed or
 split ones, and the pattern list is deliberately high-signal rather than exhaustive. The
 `secret-assignment` rule needs the key name to survive minification: an object-literal property or
 string content is caught, while `const apiKey = '…'` is constant-folded by the bundler and reaches
 the browser as a bare string, which is caught only if its format matches another rule or it is the
-value of a declared or credential-named environment variable. Files in `public/` are served
-verbatim and are not scanned; none exist yet. The check complements, and does not replace,
-keeping secrets out of the environment of the build in the first place.
+value of a declared or credential-named environment variable. The `url-credentials` rule matches
+the `scheme://[user]:password@` shape wherever it appears, so a URI template or a
+regular-expression source string containing a literal scheme followed by `{user}:{pass}@` in
+client code is reported as well and must be restructured rather than exempted; a credential passed
+as a query parameter or without a scheme is not matched.
+Files in `public/` are served verbatim and are not scanned; none exist yet. The check
+complements, and does not replace, keeping secrets out of the environment of the build in the
+first place.
 
 ## Repository hygiene
 

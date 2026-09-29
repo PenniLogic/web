@@ -26,25 +26,52 @@ export const PLANTED_FIXTURE_DIR = path.join('src', 'app', '(customer)', PLANTED
 export const PLANTED_ENVIRONMENT_VARIABLE = 'WEB_PLANTED_TOKEN';
 
 /**
- * Secret-like literals for the fixture, one per detection rule. They are
- * assembled at runtime so this source file never contains a token-shaped
- * literal that repository or push-protection secret scanning would flag.
+ * Secret-like literals for the fixture, keyed by a label and mapped to the
+ * detection rule each must trip. They are assembled at runtime so this source
+ * file never contains a token-shaped literal that repository or
+ * push-protection secret scanning would flag.
  */
-export function plantedLiterals(): Readonly<Record<string, string>> {
+export interface PlantedLiteral {
+  readonly label: string;
+  readonly rule: string;
+  readonly value: string;
+}
+
+export function plantedLiterals(): readonly PlantedLiteral[] {
   const encode = (value: object): string =>
     Buffer.from(JSON.stringify(value)).toString('base64url');
-  return Object.freeze({
-    'stripe-live-key': ['sk', 'live', 'PLANTEDFIXTURE0000000000'].join('_'),
-    'aws-access-key-id': ['AKIA', 'PLANTEDFIXTURE00'].join(''),
-    'json-web-token': [
-      encode({ alg: 'none', typ: 'JWT' }),
-      encode({ sub: 'planted-fixture', note: 'synthetic' }),
-      'planted-fixture-signature',
-    ].join('.'),
-    'url-credentials': ['postgres://planted_user', 'planted-fixture-password@db.invalid/app'].join(
-      ':',
-    ),
-  });
+  return Object.freeze([
+    {
+      label: 'stripe-live-key',
+      rule: 'stripe-live-key',
+      value: ['sk', 'live', 'PLANTEDFIXTURE0000000000'].join('_'),
+    },
+    {
+      label: 'aws-access-key-id',
+      rule: 'aws-access-key-id',
+      value: ['AKIA', 'PLANTEDFIXTURE00'].join(''),
+    },
+    {
+      label: 'json-web-token',
+      rule: 'json-web-token',
+      value: [
+        encode({ alg: 'none', typ: 'JWT' }),
+        encode({ sub: 'planted-fixture', note: 'synthetic' }),
+        'planted-fixture-signature',
+      ].join('.'),
+    },
+    {
+      label: 'url-credentials-user-password',
+      rule: 'url-credentials',
+      value: ['postgres://planted_user', 'planted-fixture-password@db.invalid/app'].join(':'),
+    },
+    {
+      // Empty user part, as in Azure Cache for Redis / Heroku Redis URLs.
+      label: 'url-credentials-password-only',
+      rule: 'url-credentials',
+      value: ['rediss://', 'planted-fixture-access-key@cache.invalid:6380'].join(':'),
+    },
+  ]);
 }
 
 /**
@@ -55,11 +82,11 @@ export function plantedLiterals(): Readonly<Record<string, string>> {
 export const PLANTED_ASSIGNMENT_KEY = 'clientSecret';
 export const PLANTED_ASSIGNMENT_VALUE = 'planted-fixture-client-secret-value';
 
-function fixtureSources(literals: Readonly<Record<string, string>>): Record<string, string> {
-  const items = Object.entries(literals)
+function fixtureSources(literals: readonly PlantedLiteral[]): Record<string, string> {
+  const items = literals
     .map(
-      ([rule, value]) =>
-        `        <li data-rule=${JSON.stringify(rule)}>${JSON.stringify(value)}</li>`,
+      ({ label, value }) =>
+        `        <li data-label=${JSON.stringify(label)}>${JSON.stringify(value)}</li>`,
     )
     .join('\n');
   return {
@@ -102,17 +129,29 @@ interface Expectation {
   readonly rule: Finding['rule'];
   readonly subject: string;
   readonly location: 'static/' | 'server/';
+  /** Minimum occurrences in one artifact, so two literals sharing a rule are both proven. */
+  readonly occurrences: number;
 }
 
-export function expectations(literals: Readonly<Record<string, string>>): Expectation[] {
+export function expectations(literals: readonly PlantedLiteral[]): Expectation[] {
+  const perRule = new Map<string, number>();
+  for (const literal of literals) {
+    perRule.set(literal.rule, (perRule.get(literal.rule) ?? 0) + 1);
+  }
   return [
-    ...Object.keys(literals).map((subject): Expectation => ({
+    ...[...perRule.entries()].map(([subject, occurrences]): Expectation => ({
       rule: 'secret-pattern',
       subject,
       location: 'static/',
+      occurrences,
     })),
-    { rule: 'secret-pattern', subject: 'secret-assignment', location: 'static/' },
-    { rule: 'secret-env-value', subject: PLANTED_ENVIRONMENT_VARIABLE, location: 'server/' },
+    { rule: 'secret-pattern', subject: 'secret-assignment', location: 'static/', occurrences: 1 },
+    {
+      rule: 'secret-env-value',
+      subject: PLANTED_ENVIRONMENT_VARIABLE,
+      location: 'server/',
+      occurrences: 1,
+    },
   ];
 }
 
@@ -126,12 +165,13 @@ export function missingExpectations(
         (finding) =>
           finding.rule === expectation.rule &&
           finding.subject === expectation.subject &&
-          finding.file.startsWith(expectation.location),
+          finding.file.startsWith(expectation.location) &&
+          finding.occurrences >= expectation.occurrences,
       ),
   );
 }
 
-function writeFixture(literals: Readonly<Record<string, string>>): void {
+function writeFixture(literals: readonly PlantedLiteral[]): void {
   if (existsSync(PLANTED_FIXTURE_DIR)) {
     console.warn(`planted-secret-check: replacing leftover fixture at ${PLANTED_FIXTURE_DIR}`);
     removeFixture();
@@ -200,7 +240,7 @@ export function main(argv: readonly string[]): number {
   try {
     writeFixture(literals);
     console.log(
-      `planted-secret-check: planted ${Object.keys(literals).length} literal(s), one ${PLANTED_ASSIGNMENT_KEY} assignment and ${PLANTED_ENVIRONMENT_VARIABLE} in ${PLANTED_FIXTURE_DIR}; building into ${PLANTED_DIST_DIR}`,
+      `planted-secret-check: planted ${literals.length} literal(s), one ${PLANTED_ASSIGNMENT_KEY} assignment and ${PLANTED_ENVIRONMENT_VARIABLE} in ${PLANTED_FIXTURE_DIR}; building into ${PLANTED_DIST_DIR}`,
     );
     const buildStatus = buildPlantedVariant(plantedToken);
     if (buildStatus !== 0) {
