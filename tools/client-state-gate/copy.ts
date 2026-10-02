@@ -104,7 +104,9 @@ export function checkRendering(
     }
   }
   if (
-    ['permission_denied', 'quota_exceeded', 'offline', 'degraded'].includes(state.id) &&
+    (['loading', 'permission_denied', 'quota_exceeded', 'offline', 'degraded'].includes(state.id) ||
+      observation.scope === 'region' ||
+      observation.scope === 'action') &&
     !rendered.unaffected_surface_usable
   ) {
     problems.push('unaffected_content_blocked');
@@ -117,6 +119,9 @@ export function checkRendering(
   }
   if (['loading', 'error'].includes(state.id) && context.displayable_data_present) {
     problems.push('held_data_requires_stale');
+  }
+  if (state.id === 'empty' && context.displayable_data_present) {
+    problems.push('empty_with_displayable_data');
   }
   if (
     state.id === 'error' &&

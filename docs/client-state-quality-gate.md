@@ -78,6 +78,12 @@ Loading before the slow threshold is the published exception: no copy/action is 
 observation alone cannot satisfy loading coverage; the post-threshold observation is also
 required. No timing budget is invented.
 
+Every loading observation must keep unaffected regions usable, including an early skeleton
+followed by a valid later observation. All region/action states must coexist with unaffected
+surface content; a whole-surface error may still make the surface's purpose unavailable.
+An empty observation cannot declare affected displayable data, even when its rendering says
+`none`; contradictory context fails with the static `empty_with_displayable_data` code.
+
 Copy and action labels are instantiated from the pinned data, never paraphrased. The error
 validation variant keeps the registered submit label at action scope. Denial binds to the
 published cause's copy/action and requires hidden affected data, no extra state text or hidden

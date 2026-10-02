@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { createClientStateGate } from '../tools/client-state-gate/index.ts';
-import type { StateObservation } from '../tools/client-state-gate/index.ts';
+import type { ClientRegistry, StateObservation } from '../tools/client-state-gate/index.ts';
 import { observations, registry } from './fixtures/client-state-taxonomy/synthetic.ts';
 
 const directory = new URL('../quality/client-state-taxonomy/', import.meta.url);
@@ -156,6 +156,257 @@ describe('client_state_coverage contract (SYNTHETIC fixtures, never actual UI co
       applicable_states: 8,
       observed_states: 8,
       problems: [],
+    });
+  });
+
+  describe('independent-review contract regressions (SYNTHETIC facts, not rendered UI)', () => {
+    function stateObservation(id: string): StateObservation {
+      const observation = observations.find((entry) => entry.state_id === id);
+      if (observation === undefined) {
+        throw new Error('SYNTHETIC state fixture missing');
+      }
+      return observation;
+    }
+
+    const loading = stateObservation('loading');
+    const error = stateObservation('error');
+    const validation: StateObservation = {
+      ...error,
+      scope: 'action',
+      variant: 'validation',
+      placeholders: {
+        ...error.placeholders,
+        field_guidance: { value: 'Add a description.', source: 'component_copy' },
+        submit_label: { value: 'Save', source: 'surface_registration' },
+      },
+      rendered: {
+        ...error.rendered,
+        body: 'Add a description.',
+        recovery_actions: [{ id: 'retry', label: 'Save' }],
+      },
+    };
+    const loadingRegistry: ClientRegistry = {
+      ...registry,
+      state_ids: ['loading'],
+      surfaces: registry.surfaces.map((surface) => ({
+        ...surface,
+        applicable_states: ['loading'],
+      })),
+    };
+
+    function loadingObservation(
+      phase: NonNullable<StateObservation['context']['loading_phase']>,
+      scope: string,
+      usable: boolean,
+    ): StateObservation {
+      return {
+        ...loading,
+        scope,
+        context: { ...loading.context, loading_phase: phase },
+        rendered: {
+          ...loading.rendered,
+          unaffected_surface_usable: usable,
+          ...(phase === 'before_slow_threshold'
+            ? { headline: '', body: '', recovery_actions: [] }
+            : {}),
+        },
+      };
+    }
+
+    it.each([
+      {
+        name: 'source-rule-loading-unaffected-blocked',
+        observation: loadingObservation('after_slow_threshold', 'region', false),
+        code: 'unaffected_content_blocked',
+      },
+      {
+        name: 'source-rule-action-error-unaffected-blocked',
+        observation: {
+          ...validation,
+          rendered: { ...validation.rendered, unaffected_surface_usable: false },
+        },
+        code: 'unaffected_content_blocked',
+      },
+      {
+        name: 'source-rule-empty-with-displayable-data',
+        observation: {
+          ...stateObservation('empty'),
+          context: { connectivity: 'online', displayable_data_present: true },
+        },
+        code: 'empty_with_displayable_data',
+      },
+    ])('Core counterexample: $name', ({ observation, code }) => {
+      const result = gate().fixture_state_coverage(
+        registry,
+        replaceObservation(observation.state_id, () => observation),
+      );
+      problem(result, code);
+      expect(result.observed_states).toBe(7);
+      expect(result.problems).toEqual([
+        {
+          code,
+          observation: observations.findIndex((entry) => entry.state_id === observation.state_id),
+        },
+        { code: 'missing_observation', registration: 0 },
+      ]);
+      expect(JSON.stringify(result)).not.toContain(observation.rendered.headline);
+      expect(JSON.stringify(result)).not.toContain(observation.rendered.body);
+    });
+
+    it.each([
+      {
+        name: 'Q103 post-threshold loading blocks unaffected content',
+        inputs: [loadingObservation('after_slow_threshold', 'region', false)],
+        observed_states: 0,
+      },
+      {
+        name: 'Q104 blocked early loading followed by valid late loading',
+        inputs: [
+          loadingObservation('before_slow_threshold', 'region', false),
+          loadingObservation('after_slow_threshold', 'region', true),
+        ],
+        observed_states: 1,
+      },
+    ])('QA counterexample: $name', ({ inputs, observed_states }) => {
+      const result = gate().fixture_state_coverage(loadingRegistry, inputs);
+      problem(result, 'unaffected_content_blocked');
+      expect(result.observed_states).toBe(observed_states);
+      expect(result.problems).toEqual([
+        { code: 'unaffected_content_blocked', observation: 0 },
+        ...(observed_states === 0 ? [{ code: 'missing_observation', registration: 0 }] : []),
+      ]);
+    });
+
+    it.each([
+      { scope: 'surface', phase: 'before_slow_threshold' },
+      { scope: 'surface', phase: 'after_slow_threshold' },
+      { scope: 'action', phase: 'before_slow_threshold' },
+      { scope: 'action', phase: 'after_slow_threshold' },
+    ] as const)('rejects blocked $scope loading at $phase', ({ scope, phase }) => {
+      const result = gate().fixture_state_coverage(loadingRegistry, [
+        loadingObservation(phase, scope, false),
+        ...(phase === 'before_slow_threshold'
+          ? [loadingObservation('after_slow_threshold', scope, true)]
+          : []),
+      ]);
+      problem(result, 'unaffected_content_blocked');
+      expect(result.problems).toContainEqual({
+        code: 'unaffected_content_blocked',
+        observation: 0,
+      });
+    });
+
+    it.each(['region', 'action'])(
+      'rejects generic %s error blocking unaffected content',
+      (scope) => {
+        const result = gate().fixture_state_coverage(
+          registry,
+          replaceObservation('error', () => ({
+            ...error,
+            scope,
+            rendered: { ...error.rendered, unaffected_surface_usable: false },
+          })),
+        );
+        problem(result, 'unaffected_content_blocked');
+        expect(result.observed_states).toBe(7);
+      },
+    );
+
+    it.each(['empty', 'stale'])('enforces region coexistence for %s', (state) => {
+      const result = gate().fixture_state_coverage(
+        registry,
+        replaceObservation(state, (observation) => ({
+          ...observation,
+          rendered: { ...observation.rendered, unaffected_surface_usable: false },
+        })),
+      );
+      problem(result, 'unaffected_content_blocked');
+      expect(result.observed_states).toBe(7);
+    });
+
+    it('rejects whole-surface empty with affected displayable data even when none is rendered', () => {
+      const result = gate().fixture_state_coverage(
+        registry,
+        replaceObservation('empty', (observation) => ({
+          ...observation,
+          scope: 'surface',
+          context: { ...observation.context, displayable_data_present: true },
+        })),
+      );
+      problem(result, 'empty_with_displayable_data');
+      expect(result.observed_states).toBe(7);
+    });
+
+    it.each(
+      ['surface', 'region', 'action'].flatMap((scope) =>
+        (['before_slow_threshold', 'after_slow_threshold'] as const).map((phase) => ({
+          scope,
+          phase,
+        })),
+      ),
+    )('preserves usable $scope loading at $phase', ({ scope, phase }) => {
+      expect(
+        gate().fixture_state_coverage(loadingRegistry, [
+          loadingObservation(phase, scope, true),
+          ...(phase === 'before_slow_threshold'
+            ? [loadingObservation('after_slow_threshold', scope, true)]
+            : []),
+        ]),
+      ).toMatchObject({
+        status: 'fixture_proof',
+        applicable_states: 1,
+        observed_states: 1,
+        problems: [],
+      });
+    });
+
+    it.each(['surface', 'region'])('preserves genuine no-data empty at %s scope', (scope) => {
+      expect(
+        gate().fixture_state_coverage(
+          registry,
+          replaceObservation('empty', (observation) => ({ ...observation, scope })),
+        ),
+      ).toMatchObject({ status: 'fixture_proof', observed_states: 8, problems: [] });
+    });
+
+    it.each([
+      { scope: 'surface', usable: false },
+      { scope: 'region', usable: true },
+      { scope: 'action', usable: true },
+    ])(
+      'preserves legitimate $scope error with unaffected usability $usable',
+      ({ scope, usable }) => {
+        expect(
+          gate().fixture_state_coverage(
+            registry,
+            replaceObservation('error', () => ({
+              ...error,
+              scope,
+              rendered: { ...error.rendered, unaffected_surface_usable: usable },
+            })),
+          ),
+        ).toMatchObject({ status: 'fixture_proof', observed_states: 8, problems: [] });
+      },
+    );
+
+    it('preserves usable validation error and its registered submit label', () => {
+      expect(
+        gate().fixture_state_coverage(
+          registry,
+          replaceObservation('error', () => validation),
+        ),
+      ).toMatchObject({ status: 'fixture_proof', observed_states: 8, problems: [] });
+    });
+
+    it('still requires late loading proof when an early usable skeleton is the only observation', () => {
+      const result = gate().fixture_state_coverage(loadingRegistry, [
+        loadingObservation('before_slow_threshold', 'region', true),
+      ]);
+      expect(result).toMatchObject({
+        status: 'failed',
+        observed_states: 0,
+        problems: [{ code: 'missing_observation', registration: 0 }],
+      });
     });
   });
 
